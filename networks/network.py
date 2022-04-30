@@ -181,8 +181,7 @@ class URIM(nn.Module):
 
         # self.fuse = _ConvBNReLU(4, 2, 1, padding=0)
         self.map_update_conv = nn.Sequential(
-            nn.MaxPool2d(3, stride=1, padding=1),
-            nn.Sigmoid()
+            nn.MaxPool2d(3, stride=1, padding=1)
         )
 
     def forward(self, initial_maps, seg_features):
@@ -283,7 +282,7 @@ class Seg_head(nn.Module):
         aggr_3 = F.interpolate(aggr_3, size, mode='bilinear', align_corners=True)
         aggr_3 = self.conv_3(aggr_3)
 
-        aggr_2 = F.interpolate(aggr_2, size, mode='bilinear', align_corners=True)
+        #aggr_2 = F.interpolate(aggr_2, size, mode='bilinear', align_corners=True)
         aggr_2 = self.conv_2(aggr_2)
         features = self.conv_block(torch.cat([aggr_5, aggr_4, aggr_3, aggr_2], dim=1))
         maps = self.classifier(features)
