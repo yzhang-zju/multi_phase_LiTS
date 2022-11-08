@@ -13,6 +13,7 @@ from torch.optim import SGD, Adam
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from networks.network import Network
+import math
 
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 USE_GPU = torch.cuda.is_available()
@@ -213,7 +214,8 @@ def predict(param_set, model):
             image_pv = np.asarray(image_pv, np.float32) / 255.0
             image_art = np.asarray(image_art, np.float32) / 255.0
 
-            outputs = model_apply_full(model, image_pv, image_art)  #512
+            # outputs = model_apply_full(model, image_pv, image_art)  #fast test on full image
+            outputs = model_apply(model, image_pv, image_art, param_set['ins'], file.split('.')[0]) #test on cropped patches and stitch the results
             out_str = model_test_dir + '/' + file
             #output.save(out_str)
             imsave(out_str, np.asarray(outputs * 255., np.uint8))
@@ -229,6 +231,86 @@ def model_apply_full(model,image_pv, image_art):
     pred, _ = model(tI_pv, tI_art)
     prob = F.softmax(pred,dim=1).squeeze(0).data.cpu().numpy()
     pmap_img = prob[1]
+    return pmap_img
+
+def model_apply(model,image_pv,image_art,ins,file):
+    caseNum = file[3:6]
+
+    avk = 4
+    nrotate = 1
+    wI = np.zeros([ins, ins])
+    pmap = np.zeros([image_pv.shape[0], image_pv.shape[1]])
+    avI = np.zeros([image_pv.shape[0], image_pv.shape[1]])
+    for i in range(ins):
+        for j in range(ins):
+            dx = min(i, ins - 1 - i)
+            dy = min(j, ins - 1 - j)
+            d = min(dx, dy) + 1
+            wI[i, j] = d
+    wI = wI / wI.max()
+
+    # get centroid tumor z
+    centroid_path = '/data/zy/5type_data/newdata/xyy/myData/Multi/Multi_liverROI/centroid_tumor/'
+    cen_slices = np.loadtxt(os.path.join(centroid_path, caseNum + '.txt'), delimiter='\n')
+    cen_slices = np.array(cen_slices, dtype='int')
+    cen_pv_x = cen_slices[0]  # pv center x
+    cen_pv_y = cen_slices[1]  # pv center y
+    cen_art_x = cen_slices[3]  # art center
+    cen_art_y = cen_slices[4]  # art center
+
+    for i1 in range(math.ceil(float(avk) * (float(image_pv.shape[0]) - float(ins)) / float(ins)) + 1):
+        for j1 in range(math.ceil(float(avk) * (float(image_pv.shape[1]) - float(ins)) / float(ins)) + 1):
+
+            # pv start and end index
+            insti = math.floor(float(i1) * float(ins) / float(avk))
+            instj = math.floor(float(j1) * float(ins) / float(avk))
+            inedi = insti + ins
+            inedj = instj + ins
+
+            # art start and end index
+            insti_art = max(insti + cen_art_x - cen_pv_x, 0)
+            instj_art = max(instj + cen_art_y - cen_pv_y, 0)
+            inedi_art = insti_art + ins
+            inedj_art = instj_art + ins
+
+            if inedi > image_pv.shape[0]:
+                inedi = image_pv.shape[0]
+                insti = inedi - ins
+            if inedj > image_pv.shape[1]:
+                inedj = image_pv.shape[1]
+                instj = inedj - ins
+            if inedi_art > image_art.shape[0]:
+                inedi_art = image_art.shape[0]
+                insti_art = inedi_art - ins
+            if inedj_art > image_art.shape[1]:
+                inedj_art = image_art.shape[1]
+                instj_art = inedj_art - ins
+
+            small_pmap = np.zeros([ins, ins])
+
+            for i in range(nrotate):
+                small_in_pv = image_pv[insti:inedi, instj:inedj]
+                small_in_art = image_art[insti_art:inedi_art, instj_art:inedj_art]
+                small_in_pv = np.rot90(small_in_pv,i)
+                small_in_art = np.rot90(small_in_art,i)
+
+                tI_pv = np.transpose(small_in_pv,[2,0,1])
+                tI_art = np.transpose(small_in_art,[2,0,1])
+                tI_pv = torch.Tensor(tI_pv.copy()).cuda()
+                tI_art = torch.Tensor(tI_art.copy()).cuda()
+                pred= model(tI_pv.unsqueeze(0), tI_art.unsqueeze(0))
+
+                prob = F.softmax(pred,dim=1).squeeze(0).data.cpu().numpy()
+                small_out = prob[1]
+                small_out = np.rot90(small_out,-i)
+
+                small_pmap = small_pmap + np.array(small_out)
+
+            small_pmap = small_pmap / nrotate
+
+            pmap[insti:inedi, instj:inedj] += np.multiply(small_pmap, wI)
+            avI[insti:inedi, instj:inedj] += wI
+    pmap_img = np.divide(pmap, avI)
     return pmap_img
 
 
